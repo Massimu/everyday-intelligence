@@ -131,6 +131,16 @@ if(d.search_context&&d.search_context.changed){
   el("loc").value=ctx.city||"Selected search point";
   await load(true);
 }
+// A question defines the relevant map layers independently from the
+// previously selected tab. Mixed requests show all affected categories.
+if(d.clarification){
+  st.mode="all";
+}else if(d.requested_categories&&d.requested_categories.length){
+  const kinds=[...new Set(d.requested_categories)];
+  st.mode=kinds.length===1?kinds[0]:"all";
+}
+document.querySelectorAll("#modules button").forEach(function(b){b.classList.toggle("active",b.dataset.mode===st.mode)});
+render();
 el("answer").innerHTML=answerMarkup(d);
 el("answer").querySelectorAll("button.ask-choice").forEach(function(btn){
   btn.addEventListener("click",function(){
@@ -153,7 +163,7 @@ st.map=L.map("map").setView([st.lat,st.lon],14);
 L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",{maxZoom:19,attribution:'© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>'}).addTo(st.map);
 st.markers=L.layerGroup().addTo(st.map);st.circle=L.circle([st.lat,st.lon],{radius:st.radius,color:"#167750",weight:2,fillOpacity:.04,interactive:false}).addTo(st.map);
 st.map.on("click",function(e){changeCenter(e.latlng.lat.toFixed(5),e.latlng.lng.toFixed(5),"Selected map point")});
-for(const [k,v] of Object.entries(labels)){const btn=document.createElement("button");btn.textContent=v;btn.classList.toggle("active",k===st.mode);btn.onclick=function(){st.mode=k;document.querySelectorAll("#modules button").forEach(function(x){x.classList.toggle("active",x===btn)});resetRoute();render()};el("modules").appendChild(btn)}
+for(const [k,v] of Object.entries(labels)){const btn=document.createElement("button");btn.textContent=v;btn.dataset.mode=k;btn.classList.toggle("active",k===st.mode);btn.onclick=function(){st.mode=k;document.querySelectorAll("#modules button").forEach(function(x){x.classList.toggle("active",x===btn)});resetRoute();render()};el("modules").appendChild(btn)}
 el("radius").value=st.radius;el("radLabel").textContent=formattedDistance(st.radius);
 el("radius").oninput=function(e){st.radius=+e.target.value;st.circle.setRadius(st.radius);el("radLabel").textContent=formattedDistance(st.radius)};
 el("radius").onchange=function(){load(true)};el("refresh").onclick=function(){load(true)};el("findCity").onclick=findCity;
