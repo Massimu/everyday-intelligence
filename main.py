@@ -1,5 +1,7 @@
 """Small noncommercial six-module city intelligence prototype."""
 import asyncio, math, os, time, json
+from functools import lru_cache
+from intelligence import plan
 from pathlib import Path
 from collections import Counter
 from datetime import datetime, timezone
@@ -8,7 +10,7 @@ from fastapi import FastAPI, Query
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
-app=FastAPI(title="Everyday Intelligence",version="0.3")
+app=FastAPI(title="Everyday Intelligence",version="0.4")
 CITIES={"Braunschweig":(52.2689,10.5268),"Hannover":(52.3759,9.732),"Berlin":(52.52,13.405),"Hamburg":(53.5511,9.9937),"Leipzig":(51.3397,12.3731),"München":(48.1374,11.5755)}
 KINDS={"parking":"Parking","shopping":"Supermarkets and drugstores","neighborhood":"Neighborhood","outdoor":"Parks and gardens","pharmacy":"Pharmacies and services","discovery":"Culture and discovery"}
 cache={}
@@ -33,11 +35,15 @@ data_lock = asyncio.Lock()
 # committed only when verified and containing real, attributed OSM objects.
 snapshot_file = Path(__file__).resolve().parent / "data" / "places.json"
 
-def _saved_places(lat, lon, radius):
+@lru_cache(maxsize=1)
+def _snapshot():
     if not snapshot_file.is_file():
-        return [], None, None
+        return {"cities": {}}
+    return json.loads(snapshot_file.read_text(encoding="utf-8"))
+
+def _saved_places(lat, lon, radius):
     try:
-        dataset = json.loads(snapshot_file.read_text(encoding="utf-8"))
+        dataset = _snapshot()
         best = None
         best_distance = float("inf")
         for name, record in dataset.get("cities", {}).items():
@@ -45,8 +51,10 @@ def _saved_places(lat, lon, radius):
             if d < best_distance:
                 best = (name, record)
                 best_distance = d
-        if best is None or best_distance > 7000:
-            return [], None, None
+        # City extracts retain features around approximately 10 km from the
+        # original center. Disallow remote centers outside this region.
+        if best is None or best_distance > 8000:
+            return [], None, None, None
         name, record = best
         output = []
         for original in record.get("places", []):
@@ -55,11 +63,12 @@ def _saved_places(lat, lon, radius):
                 p = dict(original)
                 p["distance_m"] = d
                 output.append(p)
-        output.sort(key=lambda x: x["distance_m"])
-        return output, name, record.get("updated_at")
+        output.sort(key=lambda p: p["distance_m"])
+        coverage = ("partial" if best_distance + radius > 7500 else "local snapshot")
+        return output, name, record.get("updated_at"), coverage
     except Exception as exc:
         logger.error("Failed to load saved OpenStreetMap data: %s", exc)
-        return [], None, None
+        return [], None, None, None
 
 
 async def _load_osm(client, lat, lon, radius):
@@ -122,6 +131,8 @@ def _parse_places(elements, lat, lon, radius):
             "distance_m": d,
             "opening_hours": t.get("opening_hours"),
             "brand": t.get("brand"),
+            "subtype": t.get("shop") or t.get("amenity") or t.get("leisure") or t.get("tourism") or t.get("historic"),
+            "access": t.get("access"), "fee": t.get("fee"), "wheelchair": t.get("wheelchair"),
             "url": f"https://www.openstreetmap.org/{identifier}",
         })
     places.sort(key=lambda p: p["distance_m"])
@@ -137,7 +148,7 @@ async def get_data(lat, lon, radius):
     async with data_lock:
         now = time.monotonic()
         cached = cache.get(key)
-        if cached and now - cached[0] < (3600 if cached[1]["status"]["places"].startswith("live") else 60):
+        if cached and now - cached[0] < (3600 if cached[1]["status"]["places"] in ("live OSM snapshot", "saved OSM snapshot") else 60):
             return cached[1]
         status = {"places": "unavailable", "weather": "unavailable"}
         errors = []
@@ -159,16 +170,23 @@ async def get_data(lat, lon, radius):
                 except Exception as exc:
                     logger.warning("Weather request failed: %s", str(exc)[:200])
                     return None, "unavailable"
-            saved, _, _ = _saved_places(lat, lon, radius)
+            saved, _, _, _ = _saved_places(lat, lon, radius)
             if saved:
                 # Avoid slow, rate-limited public Overpass calls for supported cities.
                 # Verified offline data is refreshed weekly by GitHub Actions.
                 elements, source, failures = [], None, []
                 weather, status["weather"] = await weather_call()
             else:
-                (elements, source, failures), (weather, status["weather"]) = await asyncio.gather(
-                    _load_osm(client, lat, lon, radius), weather_call()
-                )
+                # Public Overpass queries are often blocked from shared cloud
+                # IPs. Fail fast outside downloaded coverage unless explicitly
+                # enabled, rather than freezing the interface for 60 seconds.
+                if os.getenv("ENABLE_LIVE_OVERPASS", "false").lower() == "true":
+                    (elements, source, failures), (weather, status["weather"]) = await asyncio.gather(
+                        _load_osm(client, lat, lon, radius), weather_call()
+                    )
+                else:
+                    elements, source, failures = [], None, ["No downloaded snapshot covers this search center"]
+                    weather, status["weather"] = await weather_call()
         places = _parse_places(elements, lat, lon, radius)
         if source:
             status["places"] = "live OSM snapshot"
@@ -176,12 +194,13 @@ async def get_data(lat, lon, radius):
         else:
             errors = failures
             # Prefer previously verified, attributed OSM data over empty responses.
-            stored, stored_city, saved_at = _saved_places(lat, lon, radius)
+            stored, stored_city, saved_at, coverage = _saved_places(lat, lon, radius)
             if stored:
                 places = stored
                 status["places"] = "saved OSM snapshot"
                 status["source"] = f"BBBike OSM extract, {stored_city}"
                 status["data_date"] = saved_at
+                status["coverage"] = coverage
                 logger.info("Using %s saved OSM places for %s", len(places), stored_city)
             elif cached and cached[1]["places"]:
                 places = cached[1]["places"]
@@ -201,30 +220,65 @@ async def get_data(lat, lon, radius):
         return result
 
 @app.get("/api/health")
-async def health():return {"status":"ok","version":"0.3"}
+async def health():
+    return {"status":"ok", "version":"0.4", "supported_cities":list(_snapshot().get("cities",{}))}
 @app.get("/api/cities")
-async def cities():return [{"name":k,"lat":v[0],"lon":v[1]} for k,v in CITIES.items()]
+async def cities():
+    return [{"name":name,"lat":data["latitude"],"lon":data["longitude"],"has_places":True}
+            for name,data in _snapshot().get("cities",{}).items()]
+
+geocode_cache = {}
+@app.get("/api/locations")
+async def locations(q: str = Query(min_length=2,max_length=80)):
+    """Look up German cities via the openly accessible Open-Meteo geocoder.
+
+    Geocoding a location does NOT imply mapped POI coverage at that location.
+    """
+    key=q.strip().casefold()
+    if key in geocode_cache and time.monotonic()-geocode_cache[key][0]<86400:
+        return geocode_cache[key][1]
+    try:
+        async with httpx.AsyncClient(timeout=8) as client:
+            response=await client.get("https://geocoding-api.open-meteo.com/v1/search",
+                  params={"name":q.strip(),"count":8,"language":"de","countryCode":"DE","format":"json"})
+            response.raise_for_status()
+            items=response.json().get("results",[])
+        mapped=[]
+        for item in items:
+            la,lo=item.get("latitude"),item.get("longitude")
+            if isinstance(la,(int,float)) and isinstance(lo,(int,float)):
+                _,city,_,_= _saved_places(la,lo,500)
+                mapped.append({"name":item.get("name"),"region":item.get("admin1"),"lat":la,"lon":lo,
+                              "has_places":bool(city)})
+        geocode_cache[key]=(time.monotonic(),mapped)
+        if len(geocode_cache)>200: geocode_cache.clear()
+        return mapped
+    except Exception as exc:
+        logger.warning("Geocoding request failed: %s",str(exc)[:180])
+        return []
+
 @app.get("/api/overview")
-async def overview(lat:float=Query(52.2689,ge=47,le=55.1),lon:float=Query(10.5268,ge=5,le=16),radius:int=Query(1800,ge=500,le=3000)):
+async def overview(lat:float=Query(52.2689,ge=47,le=55.1),
+                   lon:float=Query(10.5268,ge=5,le=16),
+                   radius:int=Query(1800,ge=500,le=6000)):
     return await get_data(lat,lon,radius)
+
 class Ask(BaseModel):
     question:str=Field(min_length=2,max_length=400)
     lat:float=Field(ge=47,le=55.1)
     lon:float=Field(ge=5,le=16)
-    radius:int=Field(default=1800,ge=500,le=3000)
+    radius:int=Field(default=1800,ge=500,le=6000)
+    active_category: str|None = None
+
 @app.post("/api/ask")
 async def ask(body:Ask):
-    data=await get_data(body.lat,body.lon,body.radius);q=body.question.lower()
-    words={"parking":("parking","parkhaus","parkplatz","parken"),"shopping":("shop","supermarket","drugstore","dm","rossmann","einkauf","drogerie"),"outdoor":("park","garden","outdoor","walk","spazier","grün"),"pharmacy":("pharmacy","apotheke","clinic","pharmacies"),"discovery":("museum","discover","culture","kultur","attraction","weekend","wochenende")}
-    requested=[k for k,items in words.items() if any((__import__("re").search(r"\bpark\b", q) if w=="park" else w in q) for w in items)]
-    if not requested:requested=["shopping","outdoor","pharmacy"]
-    picked=[];missing=[]
-    for kind in requested:
-        options=[p for p in data["places"] if p["category"]==kind]
-        if options:picked.append(options[0])
-        else:missing.append(KINDS[kind])
-    text=" · ".join(f'{KINDS[p["category"]]}: {p["name"]} ({p["distance_m"]} m straight-line)' for p in picked)
-    return {"summary":text or ("Map data is temporarily unavailable. Please try again shortly." if data["status"]["places"]=="unavailable" else "No matching mapped places are available for this area."),"recommended":picked,"missing":[] if data["status"]["places"]=="unavailable" else missing,"caveat":"OpenStreetMap coverage may be incomplete. Distances are straight-line estimates. Opening status, actual walking routes, prices and parking availability are not verified.","status":data["status"]}
+    data=await get_data(body.lat,body.lon,body.radius)
+    return {**plan(body.question,data["places"],body.lat,body.lon,body.radius,
+                   active=body.active_category,weather=data["weather"],
+                   source_status=data["status"]["places"]),
+            "status":data["status"]}
+
 @app.get("/",response_class=HTMLResponse)
 async def root():
-    with open(os.path.join(os.path.dirname(__file__),"index.html"),encoding="utf-8") as f:return f.read()
+    with open(os.path.join(os.path.dirname(__file__),"index.html"),encoding="utf-8") as f:
+        return f.read()
