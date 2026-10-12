@@ -36,8 +36,9 @@ jobs:
           overview=request("/api/overview?lat=52.2689&lon=10.5268&radius=1750")
           assert overview["status"]["places"]=="saved OSM snapshot",overview["status"]
           assert len(overview["places"])>=15, len(overview["places"])
-          types={p.get("subtype") for p in overview["places"]}
-          assert "supermarket" in types,sorted(str(x) for x in types)
+          # Older snapshots may lack subtype tags; typed queries must not
+          # mislabel unrelated businesses while waiting for the next data refresh.
+          assert overview["counts"].get("shopping",0)>0,overview["counts"]
           print("Places:",len(overview["places"]),"categories:",overview["counts"],flush=True)
           basics={"lat":52.2689,"lon":10.5268,"radius":6000}
           exact=request("/api/ask",dict(basics,question="Lidl"))
