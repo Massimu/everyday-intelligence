@@ -1,5 +1,6 @@
 """Small noncommercial six-module city intelligence prototype."""
-import asyncio, math, os, time
+import asyncio, math, os, time, json
+from pathlib import Path
 from collections import Counter
 from datetime import datetime, timezone
 import httpx
@@ -27,6 +28,39 @@ OVERPASS_URLS = (
 )
 logger = __import__("logging").getLogger("everyday_intelligence")
 data_lock = asyncio.Lock()
+# The website must remain usable when public Overpass endpoints are offline.
+# This file is produced by a GitHub Actions workflow from daily BBBike extracts,
+# committed only when verified and containing real, attributed OSM objects.
+snapshot_file = Path(__file__).resolve().parent / "data" / "places.json"
+
+def _saved_places(lat, lon, radius):
+    if not snapshot_file.is_file():
+        return [], None, None
+    try:
+        dataset = json.loads(snapshot_file.read_text(encoding="utf-8"))
+        best = None
+        best_distance = float("inf")
+        for name, record in dataset.get("cities", {}).items():
+            d = distance(lat, lon, record["latitude"], record["longitude"])
+            if d < best_distance:
+                best = (name, record)
+                best_distance = d
+        if best is None or best_distance > 7000:
+            return [], None, None
+        name, record = best
+        output = []
+        for original in record.get("places", []):
+            d = distance(lat, lon, original["lat"], original["lon"])
+            if d <= radius:
+                p = dict(original)
+                p["distance_m"] = d
+                output.append(p)
+        output.sort(key=lambda x: x["distance_m"])
+        return output, name, record.get("updated_at")
+    except Exception as exc:
+        logger.error("Failed to load saved OpenStreetMap data: %s", exc)
+        return [], None, None
+
 
 async def _load_osm(client, lat, lon, radius):
     # Request all six categories in one query. A short output limit would
@@ -134,8 +168,15 @@ async def get_data(lat, lon, radius):
             status["source"] = source
         else:
             errors = failures
-            # Only use last cached places when they actually came from OpenStreetMap.
-            if cached and cached[1]["places"]:
+            # Prefer previously verified, attributed OSM data over empty responses.
+            stored, stored_city, saved_at = _saved_places(lat, lon, radius)
+            if stored:
+                places = stored
+                status["places"] = "saved OSM snapshot"
+                status["source"] = f"BBBike OSM extract, {stored_city}"
+                status["data_date"] = saved_at
+                logger.info("Using %s saved OSM places for %s", len(places), stored_city)
+            elif cached and cached[1]["places"]:
                 places = cached[1]["places"]
                 status["places"] = "stale cached OSM"
                 status["source"] = cached[1]["status"].get("source", "cached")
