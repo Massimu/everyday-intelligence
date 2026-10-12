@@ -40,6 +40,17 @@ class IntentTests(unittest.TestCase):
         r=plan("Find a public barbecue area",data,52.2689,10.5268,3000)
         self.assertEqual(r["goals"],["Public barbecue area"])
         self.assertEqual(r["stops"][0]["name"],"Öffentlicher Grillplatz")
+    def test_unnamed_barbecue_is_not_claimed_publicly_accessible(self):
+        data=[
+            {"id":"node/1","name":"Unnamed mapped location","category":"outdoor","subtype":"bbq",
+             "access":"private","distance_m":50,"lat":52.269,"lon":10.527,"url":"https://www.openstreetmap.org/node/1"},
+            {"id":"node/2","name":"Unnamed mapped location","category":"outdoor","subtype":"bbq",
+             "access":None,"distance_m":500,"lat":52.27,"lon":10.53,"url":"https://www.openstreetmap.org/node/2"}]
+        r=plan("Find a public barbecue area",data,52.2689,10.5268,3000)
+        self.assertEqual(len(r["stops"]),1)
+        self.assertEqual(r["stops"][0]["id"],"node/2")
+        self.assertIn("unnamed",r["stops"][0]["name"].lower())
+        self.assertIn("fire restrictions",r["caveat"])
     def test_no_false_grill_spot(self):
         places=[{"id":"node/1","name":"Verlockung","brand":None,"category":"shopping","subtype":"beauty",
                  "distance_m":225,"lat":52.269,"lon":10.527,"url":"https://www.openstreetmap.org/node/1"}]
