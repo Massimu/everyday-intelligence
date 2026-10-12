@@ -136,7 +136,7 @@ def _goal_matches(goal: Goal, places: list[dict[str, Any]]) -> list[dict[str, An
                 continue
         if goal.subtype:
             accepted = {
-                "chemist": {"chemist", "beauty"}, "supermarket": {"supermarket","grocery","convenience"},
+                "chemist": {"chemist"}, "supermarket": {"supermarket","grocery","convenience"},
                 "park": {"park", "garden", "nature_reserve"},
                 "museum": {"museum", "gallery"}, "pharmacy": {"pharmacy"},
                 "library": {"library"}, "clinic": {"doctors", "clinic"}
