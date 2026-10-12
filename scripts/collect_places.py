@@ -57,6 +57,9 @@ class Collector(osmium.SimpleHandler):
             "id":ident, "name":name, "category":cat,
             "lat":round(lat,6), "lon":round(lon,6),
             "brand":tags.get("brand"),"opening_hours":tags.get("opening_hours"),
+            "subtype": tags.get("shop") or tags.get("amenity") or tags.get("leisure") or tags.get("tourism") or tags.get("historic"),
+            "access": tags.get("access"),"fee":tags.get("fee"),"parking_type":tags.get("parking"),
+            "wheelchair": tags.get("wheelchair"),
             "url":f"https://www.openstreetmap.org/{ident}",
         })
 
