@@ -312,7 +312,8 @@ def plan(question: str, places: list[dict], lat: float, lon: float,
         limits.append("A mapped parking location is not confirmation of public access or free spaces.")
     if any(g.subtype=="bbq" for g in goals):
         limits.append("A barbecue tag does not prove that public grilling is permitted. Verify local rules, fire restrictions and access conditions before going.")
-    return {"summary":summary,"goals":[g.label for g in goals],"stops":stops,
+    return {"summary":summary,"goals":[g.label for g in goals],
+            "requested_categories":[g.category for g in goals if g.category], "stops":stops,
             "recommended":stops,"alternatives":alt,"missing":missing,"insights":insights,
             "estimate_m":est if len(stops)>1 else None,"limits":limits,
             "caveat":" ".join(limits)}
