@@ -118,6 +118,22 @@ def _goal_matches(goal: Goal, places: list[dict[str, Any]]) -> list[dict[str, An
         if goal.name and not all(w in name for w in normalize(goal.name).split()):
             continue
         sub = normalize(p.get("subtype") or "")
+        if goal.subtype and not sub:
+            # Legacy OSM snapshots did not retain the subtype tags.
+            # Never treat a nearby nail salon as a supermarket or a
+            # library as a pharmacy. In this case use recognizable names
+            # only, and flag the missing metadata to users.
+            name_or_brand = name + " " + brand
+            hints = {
+                "supermarket": r"\b(lidl|aldi|rewe|edeka|netto|penny|kaufland|tegut|norma|supermarkt|lebensmittel|nahkauf|sparen|combi|famila)\b",
+                "chemist": r"\b(dm|rossmann|mueller|drogerie|budni|budnikowsky)\b",
+                "pharmacy": r"\b(apotheke|pharmacy)\b",
+                "library": r"\b(bibliothek|bucherei|library)\b",
+                "clinic": r"\b(klinik|arzt|praxis|doctor|clinic)\b",
+                "museum": r"\b(museum|museen|galerie|kunsthalle|gallery)\b",
+            }
+            if goal.subtype in hints and not re.search(hints[goal.subtype], name_or_brand):
+                continue
         if goal.subtype:
             accepted = {
                 "chemist": {"chemist", "beauty"}, "supermarket": {"supermarket","grocery","convenience"},
@@ -229,6 +245,8 @@ def plan(question: str, places: list[dict], lat: float, lon: float,
             "Opening hours, current availability, prices and accessibility have not been verified."]
     if source_status=="saved OSM snapshot":
         limits.append("Places come from a periodically updated OpenStreetMap snapshot, not live business data.")
+        if any(p.get("subtype") is None for p in places):
+            limits.append("Some older records lack store-type tags, so category-specific searches use conservative name matching and may miss places.")
     if any(s["category"]=="parking" for s in stops):
         limits.append("A mapped parking location is not confirmation of public access or free spaces.")
     return {"summary":summary,"goals":[g.label for g in goals],"stops":stops,
