@@ -132,7 +132,7 @@ async def get_data(lat, lon, radius):
     now = time.monotonic()
     # Retry failed external reads soon; cache successes for one hour.
     cached = cache.get(key)
-    if cached and now - cached[0] < (3600 if cached[1]["status"]["places"].startswith("live") else 60):
+    if cached and now - cached[0] < (3600 if cached[1]["status"]["places"] in ("live OSM snapshot","saved OSM snapshot") else 60):
         return cached[1]
     async with data_lock:
         now = time.monotonic()
@@ -159,9 +159,16 @@ async def get_data(lat, lon, radius):
                 except Exception as exc:
                     logger.warning("Weather request failed: %s", str(exc)[:200])
                     return None, "unavailable"
-            (elements, source, failures), (weather, status["weather"]) = await asyncio.gather(
-                _load_osm(client, lat, lon, radius), weather_call()
-            )
+            saved, _, _ = _saved_places(lat, lon, radius)
+            if saved:
+                # Avoid slow, rate-limited public Overpass calls for supported cities.
+                # Verified offline data is refreshed weekly by GitHub Actions.
+                elements, source, failures = [], None, []
+                weather, status["weather"] = await weather_call()
+            else:
+                (elements, source, failures), (weather, status["weather"]) = await asyncio.gather(
+                    _load_osm(client, lat, lon, radius), weather_call()
+                )
         places = _parse_places(elements, lat, lon, radius)
         if source:
             status["places"] = "live OSM snapshot"
@@ -217,7 +224,7 @@ async def ask(body:Ask):
         if options:picked.append(options[0])
         else:missing.append(KINDS[kind])
     text=" · ".join(f'{KINDS[p["category"]]}: {p["name"]} ({p["distance_m"]} m straight-line)' for p in picked)
-    return {"summary":text or ("Map data is temporarily unavailable. Please try again shortly." if data["status"]["places"]=="unavailable" else "No matching mapped places are available for this area."),"recommended":picked,"missing":missing,"caveat":"OpenStreetMap coverage may be incomplete. Distances are straight-line estimates. Opening status, actual walking routes, prices and parking availability are not verified.","status":data["status"]}
+    return {"summary":text or ("Map data is temporarily unavailable. Please try again shortly." if data["status"]["places"]=="unavailable" else "No matching mapped places are available for this area."),"recommended":picked,"missing":[] if data["status"]["places"]=="unavailable" else missing,"caveat":"OpenStreetMap coverage may be incomplete. Distances are straight-line estimates. Opening status, actual walking routes, prices and parking availability are not verified.","status":data["status"]}
 @app.get("/",response_class=HTMLResponse)
 async def root():
     with open(os.path.join(os.path.dirname(__file__),"index.html"),encoding="utf-8") as f:return f.read()
