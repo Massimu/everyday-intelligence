@@ -33,6 +33,13 @@ class IntentTests(unittest.TestCase):
     def test_food_intent_overrides_active_tab(self):
         x=infer_goals("Find a restaurant",active="shopping")
         self.assertEqual(x[0].category,"food")
+    def test_public_barbecue_area_not_neighborhood_report(self):
+        data=[{"id":"node/7","name":"Öffentlicher Grillplatz","category":"outdoor",
+               "subtype":"bbq","distance_m":400,"lat":52.27,"lon":10.53,
+               "url":"https://www.openstreetmap.org/node/7"}]
+        r=plan("Find a public barbecue area",data,52.2689,10.5268,3000)
+        self.assertEqual(r["goals"],["Public barbecue area"])
+        self.assertEqual(r["stops"][0]["name"],"Öffentlicher Grillplatz")
     def test_no_false_grill_spot(self):
         places=[{"id":"node/1","name":"Verlockung","brand":None,"category":"shopping","subtype":"beauty",
                  "distance_m":225,"lat":52.269,"lon":10.527,"url":"https://www.openstreetmap.org/node/1"}]
