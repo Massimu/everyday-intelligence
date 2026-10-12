@@ -57,6 +57,21 @@ class IntelligenceTests(unittest.TestCase):
     def test_multiple_brands(self):
         res=plan("Lidl and Rossmann",DATA,52.2689,10.5268,3000)
         self.assertEqual({s["name"] for s in res["stops"]},{"Lidl","Rossmann"})
+    def test_plural_categories(self):
+        res=plan("supermarkets, drugstores and pharmacies",DATA,52.2689,10.5268,3000)
+        self.assertEqual(len(res["stops"]),3)
+        self.assertIn("Lidl",{p["name"] for p in res["stops"]})
+        self.assertIn("Rossmann",{p["name"] for p in res["stops"]})
+    def test_legacy_snapshot_keeps_type_precision(self):
+        legacy=[dict(p,subtype=None) for p in DATA]
+        res=plan("nearest supermarket",legacy,52.2689,10.5268,3000)
+        self.assertEqual(res["stops"][0]["name"],"Lidl")
+        res=plan("nearest pharmacy",legacy,52.2689,10.5268,3000)
+        self.assertEqual(res["stops"][0]["name"],"Altstadt-Apotheke")
+    def test_count_question(self):
+        res=plan("How many supermarkets?",DATA,52.2689,10.5268,3000)
+        self.assertIn("1 mapped matches",res["summary"])
+        self.assertFalse(res["stops"])
     def test_unavailable(self):
         res=plan("Lidl",[],52.2689,10.5268,3000,source_status="unavailable")
         self.assertFalse(res["stops"])
