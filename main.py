@@ -10,7 +10,7 @@ from fastapi import FastAPI, Query
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
-app=FastAPI(title="Everyday Intelligence",version="0.4")
+app=FastAPI(title="Everyday Intelligence",version="0.5")
 CITIES={"Braunschweig":(52.2689,10.5268),"Hannover":(52.3759,9.732),"Berlin":(52.52,13.405),"Hamburg":(53.5511,9.9937),"Leipzig":(51.3397,12.3731),"München":(48.1374,11.5755)}
 KINDS={"parking":"Parking","shopping":"Supermarkets and drugstores","neighborhood":"Neighborhood","outdoor":"Parks and gardens","pharmacy":"Pharmacies and services","discovery":"Culture and discovery"}
 cache={}
@@ -221,7 +221,7 @@ async def get_data(lat, lon, radius):
 
 @app.get("/api/health")
 async def health():
-    return {"status":"ok", "version":"0.4", "supported_cities":list(_snapshot().get("cities",{}))}
+    return {"status":"ok", "version":"0.5", "supported_cities":list(_snapshot().get("cities",{}))}
 @app.get("/api/cities")
 async def cities():
     return [{"name":name,"lat":data["latitude"],"lon":data["longitude"],"has_places":True}
