@@ -1,0 +1,35 @@
+name: Refresh OpenStreetMap place snapshot
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/update-places.yml"
+      - "scripts/collect_places.py"
+  schedule:
+    - cron: "19 5 * * 1"
+
+permissions:
+  contents: write
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Fetch public OSM places
+        run: python scripts/collect_places.py
+      - name: Publish updated snapshot
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/places.json
+          if git diff --cached --quiet; then
+            echo "No new data"
+          else
+            git commit -m "Refresh verified OpenStreetMap snapshot"
+            git push
+          fi
