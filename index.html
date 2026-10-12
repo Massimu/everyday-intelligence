@@ -61,6 +61,7 @@ a{color:#146849}.place{border-bottom:1px solid #e2ece4;padding:11px 0}.place str
 <button data-question="Find the nearest Lidl">Nearest Lidl</button>
 <button data-question="Find parking near a pharmacy and a supermarket">Parking + errands</button>
 <button data-question="Find a park and a museum">Park + museum</button>
+<button data-question="Looking for a grill place in Braunschweig">Grill place in Braunschweig</button>
 <button data-question="Describe this neighborhood">Neighborhood report</button>
 </div>
 <form id="askForm"><input id="question" type="text" required maxlength="400" placeholder="Lidl, a pharmacy and a park"><button class="btn primary" id="askBtn">Ask ↗</button></form>
@@ -75,8 +76,8 @@ a{color:#146849}.place{border-bottom:1px solid #e2ece4;padding:11px 0}.place str
 <script>
 "use strict";
 const el=function(id){return document.getElementById(id)};
-const labels={all:"All",parking:"🅿 Parking & errands",shopping:"🛒 Shopping",neighborhood:"🏡 Neighborhood",outdoor:"🌳 Outdoor",pharmacy:"✚ Pharmacy & services",discovery:"🏛 Discovery"};
-const colors={parking:"#6c83d8",shopping:"#d58b2d",outdoor:"#258d67",pharmacy:"#d75563",discovery:"#8256b5"};
+const labels={all:"All",parking:"🅿 Parking & errands",shopping:"🛒 Shopping",neighborhood:"🏡 Neighborhood",outdoor:"🌳 Outdoor",pharmacy:"✚ Pharmacy & services",discovery:"🏛 Discovery",food:"🍽 Food & cafés"};
+const colors={parking:"#6c83d8",shopping:"#d58b2d",outdoor:"#258d67",pharmacy:"#d75563",discovery:"#8256b5",food:"#be6b33"};
 const st={lat:52.2689,lon:10.5268,radius:1750,mode:"all",places:[],status:{},weather:null,seq:0,controller:null,map:null,markers:null,circle:null,route:null,pins:null};
 function escapeHTML(value){return String(value===null||value===undefined?"":value).replace(/[&<>"']/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]})}
 function formattedDistance(n){return n<1000?n+" m":(n/1000).toFixed(2)+" km"}
@@ -85,7 +86,7 @@ function info(p){let x=[p.distance_m+" m straight-line"];if(p.subtype)x.push(p.s
 function visible(){let a=st.places.filter(function(p){return st.mode==="all"||st.mode==="neighborhood"||p.category===st.mode});if(st.mode==="parking")a=a.filter(function(p){return !["private","no"].includes(p.access)});return a}
 function render(){
 const a=visible();el("listTitle").textContent=labels[st.mode];el("listCount").textContent=a.length+" mapped";st.markers.clearLayers();
-const catCounts={},drawn={},limits={parking:st.mode==="parking"?110:18,shopping:55,pharmacy:55,outdoor:55,discovery:50};
+const catCounts={},drawn={},limits={parking:st.mode==="parking"?110:18,shopping:55,pharmacy:55,outdoor:55,discovery:50,food:55};
 for(const p of a){catCounts[p.category]=(catCounts[p.category]||0)+1;drawn[p.category]=drawn[p.category]||0;if(drawn[p.category]>=(limits[p.category]||50))continue;drawn[p.category]++;
 const marker=L.circleMarker([p.lat,p.lon],{radius:p.category==="parking"?4:6,color:"white",weight:1,fillColor:colors[p.category]||"#888",fillOpacity:.9});
 marker.bindPopup("<b>"+escapeHTML(p.name)+"</b><br>"+escapeHTML(info(p))+"<br><a target='_blank' rel='noopener' href='"+escapeHTML(p.url)+"'>OSM source ↗</a>");marker.addTo(st.markers);}
@@ -107,8 +108,13 @@ render();if(fit)st.map.fitBounds(st.circle.getBounds(),{maxZoom:16,padding:[24,2
 finally{if(id===st.seq)el("refresh").disabled=false}
 }
 function changeCenter(lat,lon,name){st.lat=+lat;st.lon=+lon;el("loc").value=name||"Selected point";load(true)}
-function answerMarkup(d){let h="<h3>"+(d.goals&&d.goals.length?"Your request: "+d.goals.map(escapeHTML).join(" + "):"Your results")+"</h3><p>"+escapeHTML(d.summary)+"</p>";
+function answerMarkup(d){let h="<h3>"+(d.clarification?"One quick choice":d.goals&&d.goals.length?"Your request: "+d.goals.map(escapeHTML).join(" + "):"Your results")+"</h3><p>"+escapeHTML(d.summary)+"</p>";
 for(const [i,p] of (d.stops||[]).entries()){h+="<div class='result'><span class='num'>"+(i+1)+"</span><div><strong>"+escapeHTML(p.name)+"</strong><small>"+escapeHTML(p.goal)+" · "+escapeHTML(info(p))+"</small><a target='_blank' rel='noopener' href='"+escapeHTML(p.url)+"'>Source ↗</a></div></div>"}
+if(d.clarification){
+h+="<p><strong>"+escapeHTML(d.clarification.question)+"</strong></p><div class='chips choice-chips'>";
+for(const option of d.clarification.options||[]){h+="<button type='button' class='ask-choice' data-question='"+escapeHTML(option.query)+"'>"+escapeHTML(option.label)+"</button>";}
+h+="</div>";
+}
 if(d.missing&&d.missing.length)h+="<p class='warning'><strong>Exact match not found:</strong> "+d.missing.map(escapeHTML).join(", ")+". Try a wider radius.</p>";
 if(d.insights&&d.insights.length)h+="<p class='tiny'><strong>Why:</strong><br>"+d.insights.map(function(v){return "• "+escapeHTML(v)}).join("<br>")+"</p>";
 if(d.alternatives&&d.alternatives.length)h+="<p class='tiny'>Other mapped options (not the requested brand): "+d.alternatives.map(function(p){return escapeHTML(p.name)+" ("+p.distance_m+" m)"}).join(" · ")+"</p>";
@@ -116,7 +122,23 @@ if(d.limits&&d.limits.length)h+="<p class='warning'>"+d.limits.map(escapeHTML).j
 return h}
 async function ask(event){if(event)event.preventDefault();const q=el("question").value.trim();if(!q)return;el("askBtn").disabled=true;el("answer").textContent="Comparing real mapped locations…";
 try{const response=await fetch("/api/ask",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({question:q,lat:st.lat,lon:st.lon,radius:st.radius,active_category:st.mode==="all"||st.mode==="neighborhood"?null:st.mode})});if(!response.ok)throw Error("Planner API "+response.status);
-const d=await response.json();el("answer").innerHTML=answerMarkup(d);resetRoute();
+const d=await response.json();
+if(d.search_context&&d.search_context.changed){
+  const ctx=d.search_context;
+  st.lat=+ctx.lat;st.lon=+ctx.lon;st.radius=+ctx.radius;
+  el("radius").value=String(st.radius);
+  el("radLabel").textContent=formattedDistance(st.radius);
+  el("loc").value=ctx.city||"Selected search point";
+  await load(true);
+}
+el("answer").innerHTML=answerMarkup(d);
+el("answer").querySelectorAll("button.ask-choice").forEach(function(btn){
+  btn.addEventListener("click",function(){
+    el("question").value=btn.dataset.question;
+    ask();
+  });
+});
+resetRoute();
 if(d.stops&&d.stops.length){const coords=[[st.lat,st.lon]].concat(d.stops.map(function(p){return [p.lat,p.lon]}));st.route=L.polyline(coords,{color:"#167750",weight:3,dashArray:"5 7"}).addTo(st.map);
 st.pins=L.layerGroup().addTo(st.map);
 d.stops.forEach(function(p,i){L.marker([p.lat,p.lon],{icon:L.divIcon({html:"<div class='marker'>"+(i+1)+"</div>",className:"",iconSize:[28,28],iconAnchor:[14,14]})}).bindPopup(escapeHTML(p.name)).addTo(st.pins)});
