@@ -1,0 +1,57 @@
+name: Verify production intelligence v0.4
+on:
+  push:
+    paths: [".github/workflows/verify-live-v04.yml"]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 11
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Confirm production API and mixed questions
+        run: |
+          python - <<'PY'
+          import json, time, urllib.request
+          HOST="https://everyday-intelligence-demo.onrender.com"
+          def request(path, payload=None):
+              data=None if payload is None else json.dumps(payload).encode()
+              headers={"Content-Type":"application/json","User-Agent":"EverydayIntelligence-Verification/0.4"}
+              req=urllib.request.Request(HOST+path, data=data, headers=headers)
+              with urllib.request.urlopen(req,timeout=30) as r:return json.load(r)
+          for attempt in range(30):
+              try:
+                  version=request("/api/health")
+                  if version.get("version")=="0.4":break
+                  print("Waiting for new version, current:",version,flush=True)
+              except Exception as e:
+                  print("Starting:",str(e)[:130],flush=True)
+              time.sleep(10)
+          else:raise SystemExit("Version 0.4 never became live")
+          print("Version:",version,flush=True)
+          overview=request("/api/overview?lat=52.2689&lon=10.5268&radius=1750")
+          assert overview["status"]["places"]=="saved OSM snapshot",overview["status"]
+          assert len(overview["places"])>=15, len(overview["places"])
+          types={p.get("subtype") for p in overview["places"]}
+          assert "supermarket" in types,sorted(str(x) for x in types)
+          print("Places:",len(overview["places"]),"categories:",overview["counts"],flush=True)
+          basics={"lat":52.2689,"lon":10.5268,"radius":6000}
+          exact=request("/api/ask",dict(basics,question="Lidl"))
+          print("Brand query:",exact["summary"],exact["missing"],flush=True)
+          assert all("lidl" in (p["name"]+" "+str(p.get("brand"))).lower() for p in exact["stops"]),exact
+          mixed=request("/api/ask",dict(basics,question="Find a supermarket, a pharmacy and a park"))
+          assert len(mixed["stops"])==3,mixed
+          assert {x["category"] for x in mixed["stops"]}=={"shopping","pharmacy","outdoor"},mixed
+          print("Mixed route:",[(s["name"],s["category"]) for s in mixed["stops"]],flush=True)
+          neighborhood=request("/api/ask",dict(basics,question="Describe this neighborhood"))
+          assert neighborhood["summary"].startswith("Neighborhood overview")
+          assert len(neighborhood["insights"])>=3,neighborhood
+          print("Neighborhood insights:",neighborhood["insights"],flush=True)
+          try:print("Geocoding Berlin:",request("/api/locations?q=Berlin")[:2],flush=True)
+          except Exception as e:print("Noncritical geocoding test error:",str(e)[:200],flush=True)
+          print("PASS: Production geographic data and intelligence are working",flush=True)
+          PY
