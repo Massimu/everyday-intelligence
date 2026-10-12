@@ -128,6 +128,8 @@ def _goal_matches(goal: Goal, places: list[dict[str, Any]]) -> list[dict[str, An
             continue
         if goal.category == "parking" and p.get("access") in ("no", "private"):
             continue
+        if goal.subtype == "bbq" and p.get("access") in ("no", "private", "customers"):
+            continue
         name = normalize(p.get("name", ""))
         brand = normalize(p.get("brand") or "")
         if goal.brand:
@@ -253,6 +255,10 @@ def plan(question: str, places: list[dict], lat: float, lon: float,
             steps.append({"goal":g.label,"place":choices[0]})
         est=None
     stops=[dict(s["place"],goal=s["goal"],order=i+1) for i,s in enumerate(steps)]
+    # Preserve attribution; never invent a business or place name.
+    for stop in stops:
+        if stop["name"]=="Unnamed mapped location" and stop.get("subtype")=="bbq":
+            stop["name"]="Barbecue-tagged location (unnamed in OpenStreetMap)"
     brand_requested=any(g.brand for g in goals)
     if count_mode and goals:
         summary=f"Within {km}: " + "; ".join(f"{g.label}: {len(group)} mapped matches" for g,group in zip(goals,groups)) + "."
@@ -304,6 +310,8 @@ def plan(question: str, places: list[dict], lat: float, lon: float,
             limits.append("Some older records lack store-type tags, so category-specific searches use conservative name matching and may miss places.")
     if any(s["category"]=="parking" for s in stops):
         limits.append("A mapped parking location is not confirmation of public access or free spaces.")
+    if any(g.subtype=="bbq" for g in goals):
+        limits.append("A barbecue tag does not prove that public grilling is permitted. Verify local rules, fire restrictions and access conditions before going.")
     return {"summary":summary,"goals":[g.label for g in goals],"stops":stops,
             "recommended":stops,"alternatives":alt,"missing":missing,"insights":insights,
             "estimate_m":est if len(stops)>1 else None,"limits":limits,
