@@ -1,7 +1,8 @@
 """Small noncommercial six-module city intelligence prototype."""
 import asyncio, math, os, time, json
 from functools import lru_cache
-from intelligence import plan
+from intelligence import plan, normalize
+from intent_agent import radius_from_text, explicit_city, city_candidate, strip_city, clarification
 from pathlib import Path
 from collections import Counter
 from datetime import datetime, timezone
@@ -10,7 +11,7 @@ from fastapi import FastAPI, Query
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
-app=FastAPI(title="Everyday Intelligence",version="0.5")
+app=FastAPI(title="Everyday Intelligence",version="0.6")
 CITIES={"Braunschweig":(52.2689,10.5268),"Hannover":(52.3759,9.732),"Berlin":(52.52,13.405),"Hamburg":(53.5511,9.9937),"Leipzig":(51.3397,12.3731),"München":(48.1374,11.5755)}
 KINDS={"parking":"Parking","shopping":"Supermarkets and drugstores","neighborhood":"Neighborhood","outdoor":"Parks and gardens","pharmacy":"Pharmacies and services","discovery":"Culture and discovery"}
 cache={}
@@ -18,11 +19,22 @@ def distance(a,b,c,d):
     p1,p2=math.radians(a),math.radians(c);dp=p2-p1;dl=math.radians(d-b)
     return round(12742000*math.asin(min(1,math.sqrt(math.sin(dp/2)**2+math.cos(p1)*math.cos(p2)*math.sin(dl/2)**2))))
 def category(t):
-    if t.get("amenity")=="parking":return "parking"
-    if t.get("shop") in ("supermarket","convenience","grocery","chemist","beauty"):return "shopping"
-    if t.get("amenity") in ("pharmacy","clinic","library","doctors","post_office","townhall"):return "pharmacy"
-    if t.get("leisure") in ("park","garden","nature_reserve"):return "outdoor"
-    if t.get("tourism") in ("museum","gallery","attraction","viewpoint") or t.get("historic") in ("castle","monument") or t.get("amenity") in ("theatre","arts_centre"):return "discovery"
+    amenity=t.get("amenity")
+    leisure=t.get("leisure")
+    if amenity=="parking":return "parking"
+    if t.get("shop") in ("supermarket","convenience","grocery","chemist","beauty","hardware","garden_centre"):
+        return "shopping"
+    if amenity in ("pharmacy","clinic","library","doctors","post_office","townhall","bank","atm","toilets"):
+        return "pharmacy"
+    if amenity=="bbq" or leisure=="firepit" or t.get("barbecue")=="yes" or t.get("bbq")=="yes":
+        return "outdoor"
+    if leisure in ("park","garden","nature_reserve","playground") or t.get("tourism")=="picnic_site":
+        return "outdoor"
+    if amenity in ("restaurant","cafe","fast_food","biergarten") or t.get("shop")=="bakery":
+        return "food"
+    if t.get("tourism") in ("museum","gallery","attraction","viewpoint") or t.get("historic") in ("castle","monument") or amenity in ("theatre","arts_centre"):
+        return "discovery"
+
 # Two community-operated instances. Keep request volume low and reuse cached responses.
 OVERPASS_URLS = (
     "https://overpass.private.coffee/api/interpreter",
@@ -81,6 +93,11 @@ async def _load_osm(client, lat, lon, radius):
         '"leisure"~"^(park|garden|nature_reserve)$"',
         '"tourism"~"^(museum|gallery|attraction|viewpoint)$"',
         '"historic"~"^(castle|monument)$"',
+        '"amenity"~"^(restaurant|cafe|fast_food|biergarten|bbq)$"',
+        '"leisure"~"^(firepit|playground)$"',
+        '"tourism"="picnic_site"',
+        '"shop"="bakery"',
+        '"barbecue"="yes"',
     ]
     clauses = "".join(f"nwr[{selector}](around:{radius},{lat},{lon});" for selector in selectors)
     query = f"[out:json][timeout:22];({clauses});out center;"
@@ -131,7 +148,9 @@ def _parse_places(elements, lat, lon, radius):
             "distance_m": d,
             "opening_hours": t.get("opening_hours"),
             "brand": t.get("brand"),
-            "subtype": t.get("shop") or t.get("amenity") or t.get("leisure") or t.get("tourism") or t.get("historic"),
+            "subtype": ("bbq" if t.get("amenity")=="bbq" or t.get("leisure")=="firepit" or t.get("barbecue")=="yes" or t.get("bbq")=="yes" else
+                        t.get("shop") or t.get("amenity") or t.get("leisure") or t.get("tourism") or t.get("historic")),
+            "cuisine":t.get("cuisine"),"description":t.get("description"),
             "access": t.get("access"), "fee": t.get("fee"), "wheelchair": t.get("wheelchair"),
             "url": f"https://www.openstreetmap.org/{identifier}",
         })
@@ -221,7 +240,7 @@ async def get_data(lat, lon, radius):
 
 @app.get("/api/health")
 async def health():
-    return {"status":"ok", "version":"0.5", "supported_cities":list(_snapshot().get("cities",{}))}
+    return {"status":"ok", "version":"0.6", "supported_cities":list(_snapshot().get("cities",{}))}
 @app.get("/api/cities")
 async def cities():
     return [{"name":name,"lat":data["latitude"],"lon":data["longitude"],"has_places":True}
@@ -270,13 +289,56 @@ class Ask(BaseModel):
     radius:int=Field(default=1800,ge=500,le=6000)
     active_category: str|None = None
 
+async def _resolve_city_in_question(question: str, lat: float, lon: float):
+    """Prefer explicitly named cached cities; verify other towns with geocoding.
+
+    If a city cannot be resolved, leave the center unchanged and tell the
+    visitor: geocoding failures must never silently pretend the city changed.
+    """
+    known = {**_snapshot().get("cities",{})}
+    explicit=explicit_city(question,list(known))
+    if explicit:
+        record=known[explicit]
+        return record["latitude"],record["longitude"],explicit,None
+    candidate=city_candidate(question)
+    if not candidate:
+        return lat,lon,None,None
+    options=await locations(candidate)
+    exact=[p for p in options if normalize(p["name"])==normalize(candidate)]
+    if len(exact)==1:
+        place=exact[0]
+        return place["lat"],place["lon"],place["name"],None
+    # Multiple German towns share a name: do not pick a random one.
+    if len(exact)>1:
+        return lat,lon,None,f"Several locations are called {candidate}. Select a city using the location search above."
+    return lat,lon,None,f"I could not verify the location '{candidate}'. Choose a city using the location search above."
+
 @app.post("/api/ask")
 async def ask(body:Ask):
-    data=await get_data(body.lat,body.lon,body.radius)
-    return {**plan(body.question,data["places"],body.lat,body.lon,body.radius,
-                   active=body.active_category,weather=data["weather"],
-                   source_status=data["status"]["places"]),
-            "status":data["status"]}
+    radius=radius_from_text(body.question) or body.radius
+    lat,lon,city,city_error=await _resolve_city_in_question(body.question,body.lat,body.lon)
+    context={"lat":lat,"lon":lon,"radius":radius,"city":city,
+             "changed": (abs(lat-body.lat)>0.00001 or abs(lon-body.lon)>0.00001 or radius != body.radius)}
+    clean_question=strip_city(body.question,city)
+    data=await get_data(lat,lon,radius)
+    clarify=clarification(clean_question,city)
+    if clarify:
+        return {"summary":clarify["reason"],"clarification":clarify,
+                "goals":[],"stops":[],"recommended":[],"alternatives":[],"missing":[],
+                "insights":[],"limits":["Select which kind of grilling destination you want."],
+                "search_context":context,"status":data["status"]}
+    if city_error:
+        return {"summary":city_error,"goals":[],"stops":[],"recommended":[],
+                "alternatives":[],"missing":[],"insights":[],
+                "limits":["No location was changed because the city could not be verified."],
+                "search_context":context,"status":data["status"]}
+    # Explicit queries must not be reinterpreted as whatever tab is selected.
+    generic = normalize(clean_question.strip()) in {"nearest","near me","nearby","find nearby","closest","show nearby","here"}
+    active=body.active_category if generic else None
+    results=plan(clean_question,data["places"],lat,lon,radius,
+                 active=active,weather=data["weather"],
+                 source_status=data["status"]["places"])
+    return {**results,"search_context":context,"status":data["status"]}
 
 @app.get("/",response_class=HTMLResponse)
 async def root():
