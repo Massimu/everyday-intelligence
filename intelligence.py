@@ -228,7 +228,7 @@ def _pick_combination(goals: list[Goal], options: list[list[dict]], origin: tupl
 def plan(question: str, places: list[dict], lat: float, lon: float,
          radius: int, active: str | None = None, weather: dict | None = None,
          source_status: str = "saved OSM snapshot") -> dict[str,Any]:
-    report_mode = bool(re.search(r"\b(neighborhood|neighbourhood|viertel|wohngegend|living|leben|area|umgebung)\b",normalize(question))) or active == "neighborhood"
+    report_mode = bool(re.search(r"\b(neighborhood|neighbourhood|viertel|wohngegend|wohnviertel|umgebung)\b",normalize(question))) or active == "neighborhood"
     goals = [] if report_mode else infer_goals(question, active)
     count_mode = bool(re.search(r"\b(how many|number of|count|wie viele|anzahl)\b",normalize(question)))
     km = f"{radius/1000:g} km"
