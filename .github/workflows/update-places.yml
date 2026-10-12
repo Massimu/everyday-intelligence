@@ -20,6 +20,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Install OSM parser
+        run: python -m pip install osmium
       - name: Fetch public OSM places
         run: python scripts/collect_places.py
       - name: Publish updated snapshot
