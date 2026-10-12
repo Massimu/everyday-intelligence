@@ -20,8 +20,8 @@ BRANDS = ("lidl", "aldi", "rewe", "edeka", "netto", "penny", "kaufland",
           "rossmann", "mueller", "dm", "budni", "tegut", "norma", "obi", "bauhaus")
 RULES = [
     ("parking", "parking", r"\b(parking|parkhaus|parkplatz|parken|car park|garage)\b"),
-    ("shopping", "supermarket", r"\b(supermarket|grocer(?:y|ies)|lebensmittel|food shopping|einkaufen|discounter)\b"),
-    ("shopping", "chemist", r"\b(drugstore|drogerie|chemist|cosmetic store)\b"),
+    ("shopping", "supermarket", r"\b(supermarkets?|grocer(?:y|ies)|lebensmittel|food shopping|einkaufen|discounter)\b"),
+    ("shopping", "chemist", r"\b(drugstores?|drogerie|drogerien|chemists?|cosmetic stores?)\b"),
     ("shopping", None, r"\b(shop(?:s|ping)?|store(?:s)?|geschaft(?:e)?|laden|einkauf)\b"),
     ("outdoor", "park", r"\b(park|parks|garden|gardens|green space|outdoor|spaziergang|walk|walking|grunflachen|grunanlage)\b"),
     ("pharmacy", "pharmacy", r"\b(pharmacy|pharmacies|apotheke|apotheken|medication|medikamente)\b"),
@@ -191,6 +191,7 @@ def plan(question: str, places: list[dict], lat: float, lon: float,
          source_status: str = "saved OSM snapshot") -> dict[str,Any]:
     report_mode = bool(re.search(r"\b(neighborhood|neighbourhood|viertel|wohngegend|living|leben|area|umgebung)\b",normalize(question))) or active == "neighborhood"
     goals = [] if report_mode else infer_goals(question, active)
+    count_mode = bool(re.search(r"\b(how many|number of|count|wie viele|anzahl)\b",normalize(question)))
     km = f"{radius/1000:g} km"
     if source_status == "unavailable":
         return {"summary":"Location data is currently unavailable for this area. Move to Braunschweig or Hannover, or try again later.",
@@ -203,13 +204,18 @@ def plan(question: str, places: list[dict], lat: float, lon: float,
     valid_goals=[g for g,choices in zip(goals,groups) if choices]
     valid_options=[choices for choices in groups if choices]
     steps,est=_pick_combination(valid_goals,valid_options,(lat,lon))
-    if not steps and valid_goals:
+    if count_mode:
+        steps = []
+        est = None
+    if not steps and valid_goals and not count_mode:
         for g,choices in zip(valid_goals,valid_options):
             steps.append({"goal":g.label,"place":choices[0]})
         est=None
     stops=[dict(s["place"],goal=s["goal"],order=i+1) for i,s in enumerate(steps)]
     brand_requested=any(g.brand for g in goals)
-    if missing:
+    if count_mode and goals:
+        summary=f"Within {km}: " + "; ".join(f"{g.label}: {len(group)} mapped matches" for g,group in zip(goals,groups)) + "."
+    elif missing:
         summary=("No mapped " + ", ".join(missing) + f" within {km}." if not stops else
                  f"Found {len(stops)} of {len(goals)} requested stops within {km}. "
                  + "Not found: " + ", ".join(missing) + ".")
@@ -231,7 +237,9 @@ def plan(question: str, places: list[dict], lat: float, lon: float,
              re.search(r"\b(lidl|aldi|rewe|edeka|netto|penny|kaufland|dm|rossmann|mueller|tegut|norma|supermarkt|drogerie)\b",
                        normalize(p.get("name","")+" "+str(p.get("brand") or "")))][:3]
     insights=[]
-    if len(stops)==1:
+    if count_mode:
+        insights.append("Counts reflect mapped OpenStreetMap features, not a complete or live business census.")
+    elif len(stops)==1:
         p=stops[0]
         insights.append(f"Nearest mapped match: {p['name']} ({p['distance_m']} m aerial distance).")
     elif len(stops)>1:
