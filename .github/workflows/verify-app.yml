@@ -1,0 +1,48 @@
+name: Check app and planning logic
+on:
+  push:
+    paths:
+      - "main.py"
+      - "intelligence.py"
+      - "index.html"
+      - "tests/**"
+      - ".github/workflows/verify-app.yml"
+  workflow_dispatch:
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Python compile and planner unit tests
+        run: |
+          python -m py_compile main.py intelligence.py
+          python -m unittest discover -s tests -v
+      - name: Browser JavaScript syntax check
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          html=Path("index.html").read_text()
+          start=html.rfind("<script>")
+          end=html.rfind("</script>")
+          assert start>=0 and end>start
+          Path("/tmp/everyday-ui.js").write_text(html[start+8:end])
+          PY
+          node --check /tmp/everyday-ui.js
+      - name: FastAPI endpoints with test client
+        run: |
+          python - <<'PY'
+          from fastapi.testclient import TestClient
+          from main import app
+          c=TestClient(app)
+          assert c.get("/").status_code==200
+          data=c.get("/api/health").json()
+          assert data["status"]=="ok"
+          assert "Braunschweig" in data["supported_cities"]
+          print("App health:", data)
+          PY
