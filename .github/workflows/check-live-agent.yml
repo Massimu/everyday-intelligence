@@ -1,0 +1,65 @@
+name: Verify Ask intent and city routing on production v0.6
+on:
+  push:
+    paths:
+      - ".github/workflows/check-live-agent.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Test actual Ask outputs, city updates and category accuracy
+        run: |
+          python - <<'PY'
+          import json,time,urllib.request
+          host="https://everyday-intelligence-demo.onrender.com"
+          def req(path,payload=None):
+              data=None if payload is None else json.dumps(payload).encode("utf-8")
+              request=urllib.request.Request(host+path,data=data,headers={"Content-Type":"application/json"})
+              with urllib.request.urlopen(request,timeout=28) as response:
+                  return json.load(response)
+          for n in range(35):
+              try:
+                  v=req("/api/health")
+                  if v.get("version")=="0.6":
+                      break
+                  print("Waiting for v0.6, currently",v.get("version"),flush=True)
+              except Exception as e:
+                  print("Waiting for deployment:",str(e)[:120],flush=True)
+              time.sleep(10)
+          else:raise SystemExit("Production v0.6 not available")
+          print("LIVE:",v,flush=True)
+          base={"lat":52.3759,"lon":9.732,"radius":5250,"active_category":"shopping"}
+          ambiguous=req("/api/ask",{**base,"question":"looking for a grill place in Braunschweig"})
+          assert ambiguous.get("clarification"),ambiguous
+          assert len(ambiguous["clarification"]["options"])==3,ambiguous
+          assert ambiguous["search_context"]["city"]=="Braunschweig",ambiguous
+          assert abs(ambiguous["search_context"]["lat"]-52.2689)<0.005,ambiguous
+          assert ambiguous["stops"]==[],ambiguous
+          print("PASS: Screenshot question prompts grill-type options and switches city",flush=True)
+          outdoor=req("/api/ask",{**base,"question":"Find a public barbecue area in Braunschweig"})
+          assert "Public barbecue area" in outdoor["goals"],outdoor
+          assert not any(p["category"]=="shopping" for p in outdoor["stops"]),outdoor
+          print("BBQ:",outdoor["summary"],"Results:",[(p["name"],p.get("subtype")) for p in outdoor["stops"]],flush=True)
+          branded=req("/api/ask",{**base,"question":"Find Lidl in Braunschweig within 3 km"})
+          assert branded["search_context"]["radius"]==3000,branded
+          assert branded["stops"] and "lidl" in branded["stops"][0]["name"].lower(),branded
+          print("PASS: Named brand + radius:",branded["summary"],flush=True)
+          mixed=req("/api/ask",{**base,"question":"Find a supermarket and a pharmacy in Hannover within 2 km"})
+          assert mixed["search_context"]["city"]=="Hannover",mixed
+          assert mixed["search_context"]["radius"]==2000,mixed
+          assert len(mixed["stops"])==2,mixed
+          assert {x["category"] for x in mixed["stops"]}=={"shopping","pharmacy"},mixed
+          print("PASS: Mixed query in target city:",[(x["name"],x["category"]) for x in mixed["stops"]],flush=True)
+          overview=req("/api/overview?lat=52.2689&lon=10.5268&radius=1750")
+          print("Actual mapped types in Braunschweig:",overview["counts"],flush=True)
+          assert overview["status"]["places"]=="saved OSM snapshot",overview["status"]
+          assert overview["counts"].get("food",0)>0,"New restaurant data missing"
+          print("PASS: Version 0.6 public API and new OSM content",flush=True)
+          PY
