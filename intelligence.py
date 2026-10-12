@@ -146,6 +146,10 @@ def _goal_matches(goal: Goal, places: list[dict[str, Any]]) -> list[dict[str, An
             # Existing snapshots do not include subtype. Use name only for
             # branded searches; otherwise old snapshots lack fine distinctions.
         matched.append(p)
+    # Prioritize named, understandable places over anonymous map polygons.
+    # Parking is an exception: most useful parking facilities have no name tag.
+    if goal.category != "parking" and any(not p.get("name","").startswith("Unnamed") for p in matched):
+        matched = [p for p in matched if not p.get("name","").startswith("Unnamed")]
     matched.sort(key=lambda p: p["distance_m"])
     return matched
 
@@ -223,7 +227,9 @@ def plan(question: str, places: list[dict], lat: float, lon: float,
         alt=[p for p in groups[0] if p["id"] not in {s["id"] for s in stops}][:3]
     elif missing and brand_requested:
         # Never present an unrelated retailer as a substitute for a named brand.
-        alt=[p for p in places if p.get("category")=="shopping"][:3]
+        alt=[p for p in places if p.get("category")=="shopping" and
+             re.search(r"\b(lidl|aldi|rewe|edeka|netto|penny|kaufland|dm|rossmann|mueller|tegut|norma|supermarkt|drogerie)\b",
+                       normalize(p.get("name","")+" "+str(p.get("brand") or "")))][:3]
     insights=[]
     if len(stops)==1:
         p=stops[0]
