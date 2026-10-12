@@ -1,0 +1,39 @@
+name: Smoke test live website
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/smoke-live.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  verify-live:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Verify browser API returns real city locations
+        run: |
+          python - <<'PY'
+          import json,time,urllib.request
+          url="https://everyday-intelligence-demo.onrender.com/api/overview?lat=52.2689&lon=10.5268&radius=1800"
+          for n in range(25):
+              try:
+                  with urllib.request.urlopen(url,timeout=25) as r:
+                      d=json.load(r)
+                  counts=d.get("counts",{})
+                  status=d.get("status",{})
+                  print("Attempt",n+1,"status",status,"counts",counts,flush=True)
+                  if len(d.get("places",[])) >= 12 and counts.get("shopping",0) >= 1 and counts.get("pharmacy",0) >= 1:
+                      print("PASS: Live browser API serves OSM shop, pharmacy and other city data",flush=True)
+                      break
+              except Exception as e:
+                  print("Attempt",n+1,"failed:",str(e)[:250],flush=True)
+              time.sleep(12)
+          else:
+              raise SystemExit("FAIL: live site did not serve verified city data")
+          PY
