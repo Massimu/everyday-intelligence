@@ -15,10 +15,18 @@ from typing import Any
 LABELS = {
     "parking": "Parking", "shopping": "Shopping", "outdoor": "Parks & outdoors",
     "pharmacy": "Pharmacy & services", "discovery": "Culture & discovery",
+    "food": "Restaurants & cafés",
 }
 BRANDS = ("lidl", "aldi", "rewe", "edeka", "netto", "penny", "kaufland",
           "rossmann", "mueller", "dm", "budni", "tegut", "norma", "obi", "bauhaus")
 RULES = [
+    ("outdoor", "bbq", r"\b(grillplatz|grillstelle|grillen|public barbecue|public bbq|bbq area|barbecue area|barbecue spot|grilling spot|grilling area|firepit)\b"),
+    ("food", "grill_restaurant", r"\b(grill restaurant|bbq restaurant|barbecue restaurant|grillrestaurant)\b"),
+    ("shopping", "grill_shop", r"\b(shop selling grill|grill equipment|buy a grill|buy grill|grill kaufen|grillgerat)\b"),
+    ("food", "restaurant", r"\b(restaurants?|essen gehen|eat out|dining|gaststatte|gastwirtschaft)\b"),
+    ("food", "cafe", r"\b(cafes?|coffee shop|kaffee|kaffeetrinken)\b"),
+    ("food", "bakery", r"\b(baker(?:y|ies)|backerei|brotchen)\b"),
+    ("outdoor", "playground", r"\b(playgrounds?|spielplatz|spielplatze)\b"),
     ("parking", "parking", r"\b(parking|parkhaus|parkplatz|parken|car park|garage)\b"),
     ("shopping", "supermarket", r"\b(supermarkets?|grocer(?:y|ies)|lebensmittel|food shopping|einkaufen|discounter)\b"),
     ("shopping", "chemist", r"\b(drugstores?|drogerie|drogerien|chemists?|cosmetic stores?)\b"),
@@ -39,6 +47,7 @@ STOPWORDS = {
     "wo","um","mich","von","zum","zur","fur","bitte","nah","nahe","am","im","den",
     "parking","park","shopping","shop","store","supermarket","pharmacy","apotheke",
     "museum","outdoor","walk","service","services","drugstore","drogerie",
+    "place","places","spot","spots","locate","location","locations","something","area","city","town","please","looking",
 }
 MAX_GOALS = 5
 
@@ -66,7 +75,10 @@ class Goal:
         if self.brand: return self.brand.upper() if self.brand == "dm" else self.brand.title()
         if self.name: return self.name
         return {"supermarket": "Supermarket", "chemist": "Drugstore", "pharmacy": "Pharmacy",
-                "park": "Park", "library": "Library", "museum": "Museum", "clinic": "Medical service"}.get(
+                "park": "Park", "library": "Library", "museum": "Museum", "clinic": "Medical service",
+                "bbq": "Public barbecue area", "grill_restaurant": "Grill restaurant",
+                "grill_shop": "Grill equipment shop", "restaurant": "Restaurant", "cafe": "Café",
+                "bakery": "Bakery", "playground": "Playground"}.get(
                     self.subtype, LABELS.get(self.category, "Place"))
 
 
@@ -78,6 +90,12 @@ def infer_goals(question: str, active: str | None = None) -> list[Goal]:
             goals.append(Goal("shopping", brand=brand))
     for cat, subtype, pattern in RULES:
         if re.search(pattern, text):
+            if subtype == "restaurant" and any(g.subtype=="grill_restaurant" for g in goals):
+                continue
+            if subtype == "park" and any(g.subtype in ("bbq","playground") for g in goals) and not re.search(r"\bparks?\b",text):
+                continue
+            if cat == "shopping" and subtype is None and any(g.subtype=="grill_shop" for g in goals):
+                continue
             if cat == "shopping" and any(g.brand for g in goals) and not subtype:
                 continue
             if cat == "shopping" and any(g.brand for g in goals) and subtype in ("chemist", "supermarket"):
@@ -92,7 +110,9 @@ def infer_goals(question: str, active: str | None = None) -> list[Goal]:
     if goals:
         # Explicitly requested "park and parking" remain different intents.
         return goals[:MAX_GOALS]
-    if active and active in LABELS:
+    # The selected tab is only a fallback for an empty/generic question.
+    # Explicit requests always override it (e.g. "grill place" on Shopping).
+    if active and active in LABELS and text in {"nearest","near me","nearby","find nearby","closest","show nearby","here"}:
         return [Goal(active)]
     # Name search for "Rose Nails" or "Lidl" (Lidl handled as known brand).
     words = [w for w in re.findall(r"[\w-]+", text) if len(w) >= 3 and w not in STOPWORDS]
@@ -131,6 +151,13 @@ def _goal_matches(goal: Goal, places: list[dict[str, Any]]) -> list[dict[str, An
                 "library": r"\b(bibliothek|bucherei|library)\b",
                 "clinic": r"\b(klinik|arzt|praxis|doctor|clinic)\b",
                 "museum": r"\b(museum|museen|galerie|kunsthalle|gallery)\b",
+                "restaurant": r"\b(restaurant|gaststatte|imbiss|pizzeria|wirtshaus|bistro)\b",
+                "cafe": r"\b(cafe|kaffee|coffee)\b",
+                "bakery": r"\b(backerei|backstube|backshop|bakery)\b",
+                "playground": r"\b(spielplatz|playground)\b",
+                "bbq": r"\b(grillplatz|grillstelle|barbecue|bbq|firepit)\b",
+                "grill_restaurant": r"\b(grill|bbq|barbecue)\b",
+                "grill_shop": r"\b(grill|bbq)\b",
             }
             if goal.subtype in hints and not re.search(hints[goal.subtype], name_or_brand):
                 continue
@@ -139,12 +166,24 @@ def _goal_matches(goal: Goal, places: list[dict[str, Any]]) -> list[dict[str, An
                 "chemist": {"chemist"}, "supermarket": {"supermarket","grocery","convenience"},
                 "park": {"park", "garden", "nature_reserve"},
                 "museum": {"museum", "gallery"}, "pharmacy": {"pharmacy"},
-                "library": {"library"}, "clinic": {"doctors", "clinic"}
+                "library": {"library"}, "clinic": {"doctors", "clinic"},
+                "bbq": {"bbq", "firepit"},
+                "grill_restaurant": {"grill_restaurant", "restaurant"},
+                "grill_shop": {"grill_shop","hardware","garden_centre"},
+                "restaurant": {"restaurant","fast_food","biergarten"},
+                "cafe": {"cafe"}, "bakery": {"bakery"},
+                "playground": {"playground"}
             }.get(goal.subtype, {goal.subtype})
             if sub and sub not in accepted:
                 continue
             # Existing snapshots do not include subtype. Use name only for
             # branded searches; otherwise old snapshots lack fine distinctions.
+        # A generic restaurant tag cannot prove that food is grilled.
+        # For grill queries require a matching name or explicitly tagged cuisine.
+        if goal.subtype == "grill_restaurant" and not re.search(r"\b(grill|bbq|barbecue|steakhouse)\b", name + " " + normalize(p.get("cuisine") or "")):
+            continue
+        if goal.subtype == "grill_shop" and not re.search(r"\b(grill|bbq|barbecue)\b", name + " " + normalize(p.get("description") or "")):
+            continue
         matched.append(p)
     # Prioritize named, understandable places over anonymous map polygons.
     # Parking is an exception: most useful parking facilities have no name tag.
@@ -198,7 +237,9 @@ def plan(question: str, places: list[dict], lat: float, lon: float,
                 "goals":[], "stops":[], "recommended":[], "alternatives":[], "missing":[],
                 "insights":[], "estimate_m":None, "limits":["No verified mapped locations were loaded."]}
     if not goals and not report_mode:
-        goals = [Goal(cat) for cat in ("shopping","outdoor","pharmacy") if any(p["category"] == cat for p in places)]
+        return {"summary":"I could not determine which kind of place you want. Try a specific place or activity, such as Lidl, pharmacy, café, playground or public BBQ area.",
+                "goals":[], "stops":[], "recommended":[], "alternatives":[], "missing":[],
+                "insights":[], "estimate_m":None, "limits":["No category was guessed from your selected tab."]}
     groups = [_goal_matches(g,places) for g in goals]
     missing=[g.label for g,choices in zip(goals,groups) if not choices]
     valid_goals=[g for g,choices in zip(goals,groups) if choices]
