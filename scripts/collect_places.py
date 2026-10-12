@@ -19,16 +19,24 @@ CITIES = {
 DATA_FILE = Path("data/places.json")
 
 def category(tags):
-    if tags.get("amenity") == "parking":
-        return "parking"
-    if tags.get("shop") in ("supermarket", "convenience", "grocery", "chemist", "beauty"):
+    amenity=tags.get("amenity")
+    leisure=tags.get("leisure")
+    shop=tags.get("shop")
+    if amenity=="parking":return "parking"
+    if shop in ("supermarket","convenience","grocery","chemist","beauty","hardware","garden_centre"):
         return "shopping"
-    if tags.get("amenity") in ("pharmacy", "clinic", "library", "doctors", "post_office", "townhall"):
+    if amenity in ("pharmacy","clinic","library","doctors","post_office","townhall","bank","atm","toilets"):
         return "pharmacy"
-    if tags.get("leisure") in ("park", "garden", "nature_reserve"):
+    if amenity=="bbq" or leisure=="firepit" or tags.get("barbecue")=="yes" or tags.get("bbq")=="yes":
         return "outdoor"
-    if tags.get("tourism") in ("museum", "gallery", "attraction", "viewpoint") or tags.get("historic") in ("castle", "monument") or tags.get("amenity") in ("theatre", "arts_centre"):
+    if leisure in ("park","garden","nature_reserve","playground") or tags.get("tourism")=="picnic_site":
+        return "outdoor"
+    if amenity in ("restaurant","cafe","fast_food","biergarten") or shop=="bakery":
+        return "food"
+    if tags.get("tourism") in ("museum","gallery","attraction","viewpoint") or tags.get("historic") in ("castle","monument") or amenity in ("theatre","arts_centre"):
         return "discovery"
+    return None
+
 
 class Collector(osmium.SimpleHandler):
     def __init__(self, latitude, longitude):
@@ -53,11 +61,15 @@ class Collector(osmium.SimpleHandler):
             return
         self.seen.add(ident)
         name=tags.get("name") or tags.get("name:de") or "Unnamed mapped location"
+        subtype = ("bbq" if tags.get("amenity")=="bbq" or tags.get("leisure")=="firepit" or
+                   tags.get("barbecue")=="yes" or tags.get("bbq")=="yes" else
+                   tags.get("shop") or tags.get("amenity") or tags.get("leisure") or
+                   tags.get("tourism") or tags.get("historic"))
         self.places.append({
             "id":ident, "name":name, "category":cat,
             "lat":round(lat,6), "lon":round(lon,6),
             "brand":tags.get("brand"),"opening_hours":tags.get("opening_hours"),
-            "subtype": tags.get("shop") or tags.get("amenity") or tags.get("leisure") or tags.get("tourism") or tags.get("historic"),
+            "subtype": subtype, "cuisine":tags.get("cuisine"),"description":tags.get("description"),
             "access": tags.get("access"),"fee":tags.get("fee"),"parking_type":tags.get("parking"),
             "wheelchair": tags.get("wheelchair"),
             "url":f"https://www.openstreetmap.org/{ident}",
