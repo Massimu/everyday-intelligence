@@ -106,6 +106,8 @@ def _goal_matches(goal: Goal, places: list[dict[str, Any]]) -> list[dict[str, An
     for p in places:
         if goal.category and p.get("category") != goal.category:
             continue
+        if goal.category == "parking" and p.get("access") in ("no", "private"):
+            continue
         name = normalize(p.get("name", ""))
         brand = normalize(p.get("brand") or "")
         if goal.brand:
@@ -167,13 +169,14 @@ def _pick_combination(goals: list[Goal], options: list[list[dict]], origin: tupl
 def plan(question: str, places: list[dict], lat: float, lon: float,
          radius: int, active: str | None = None, weather: dict | None = None,
          source_status: str = "saved OSM snapshot") -> dict[str,Any]:
-    goals = infer_goals(question, active)
+    report_mode = bool(re.search(r"\b(neighborhood|neighbourhood|viertel|wohngegend|living|leben|area|umgebung)\b",normalize(question))) or active == "neighborhood"
+    goals = [] if report_mode else infer_goals(question, active)
     km = f"{radius/1000:g} km"
     if source_status == "unavailable":
         return {"summary":"Location data is currently unavailable for this area. Move to Braunschweig or Hannover, or try again later.",
                 "goals":[], "stops":[], "recommended":[], "alternatives":[], "missing":[],
                 "insights":[], "estimate_m":None, "limits":["No verified mapped locations were loaded."]}
-    if not goals:
+    if not goals and not report_mode:
         goals = [Goal(cat) for cat in ("shopping","outdoor","pharmacy") if any(p["category"] == cat for p in places)]
     groups = [_goal_matches(g,places) for g in goals]
     missing=[g.label for g,choices in zip(goals,groups) if not choices]
@@ -190,6 +193,8 @@ def plan(question: str, places: list[dict], lat: float, lon: float,
         summary=("No mapped " + ", ".join(missing) + f" within {km}." if not stops else
                  f"Found {len(stops)} of {len(goals)} requested stops within {km}. "
                  + "Not found: " + ", ".join(missing) + ".")
+    elif report_mode:
+        summary=f"Neighborhood overview within {km} of the selected point, using available mapped places. This is not a quality or livability score."
     elif stops:
         summary=(f"Found {stops[0]['name']} {round(stops[0]['distance_m'])} m from the selected point."
                  if len(stops)==1 else f"Found a {len(stops)}-stop combination within {km}.")
