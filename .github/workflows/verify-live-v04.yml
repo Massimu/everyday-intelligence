@@ -1,4 +1,4 @@
-name: Verify production intelligence v0.4
+name: Verify production intelligence v0.5
 on:
   push:
     paths: [".github/workflows/verify-live-v04.yml"]
@@ -26,12 +26,12 @@ jobs:
           for attempt in range(30):
               try:
                   version=request("/api/health")
-                  if version.get("version")=="0.4":break
+                  if version.get("version")=="0.5":break
                   print("Waiting for new version, current:",version,flush=True)
               except Exception as e:
                   print("Starting:",str(e)[:130],flush=True)
               time.sleep(10)
-          else:raise SystemExit("Version 0.4 never became live")
+          else:raise SystemExit("Version 0.5 never became live")
           print("Version:",version,flush=True)
           overview=request("/api/overview?lat=52.2689&lon=10.5268&radius=1750")
           assert overview["status"]["places"]=="saved OSM snapshot",overview["status"]
@@ -47,7 +47,19 @@ jobs:
           mixed=request("/api/ask",dict(basics,question="Find a supermarket, a pharmacy and a park"))
           assert len(mixed["stops"])==3,mixed
           assert {x["category"] for x in mixed["stops"]}=={"shopping","pharmacy","outdoor"},mixed
-          print("Mixed route:",[(s["name"],s["category"]) for s in mixed["stops"]],flush=True)
+          supermarket=next(x for x in mixed["stops"] if x["category"]=="shopping")
+          pharmacy=next(x for x in mixed["stops"] if x["category"]=="pharmacy")
+          assert "nails" not in supermarket["name"].lower(),supermarket
+          assert any(name in supermarket["name"].lower() for name in ("lidl","rewe","edeka","aldi","penny","netto","kaufland","supermarkt","nahkauf","tegut")),supermarket
+          assert "apotheke" in pharmacy["name"].lower(),pharmacy
+          print("Verified mixed-category route:",[(s["name"],s["category"]) for s in mixed["stops"]],flush=True)
+          plural=request("/api/ask",dict(basics,question="Find supermarkets, drugstores and pharmacies"))
+          assert len(plural["stops"])==3,plural
+          chemist=next(x for x in plural["stops"] if x["goal"]=="Drugstore")
+          assert "nails" not in chemist["name"].lower(),chemist
+          count=request("/api/ask",dict(basics,question="How many supermarkets?"))
+          assert "mapped matches" in count["summary"],count
+          print("Plural categories and count queries:",plural["summary"],count["summary"],flush=True)
           neighborhood=request("/api/ask",dict(basics,question="Describe this neighborhood"))
           assert neighborhood["summary"].startswith("Neighborhood overview")
           assert len(neighborhood["insights"])>=3,neighborhood
